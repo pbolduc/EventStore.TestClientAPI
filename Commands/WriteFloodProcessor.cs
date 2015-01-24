@@ -115,7 +115,7 @@ namespace EventStore.TestClientAPI.Commands
         {
             return new EventData(Guid.NewGuid(), "TakeSomeSpaceEvent", true,
                 UTF8NoBom.GetBytes("{ \"DATA\" : \"" + new string('*', size) + "\"}"),
-                UTF8NoBom.GetBytes("{ \"METADATA\" : \"" + new string('$', 100) + "\", \"CommitId\": \"" + Guid.NewGuid().ToString("n") + "\"}"));
+                UTF8NoBom.GetBytes("{ \"METADATA\" : \"" + new string('$', 100) + "\"}"));
         }
     }
 }
