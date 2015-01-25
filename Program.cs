@@ -36,7 +36,7 @@ namespace EventStore.TestClientAPI
 
         private static void InitializeMetrics(TimeSpan interval, string filenamePrefix)
         {
-            string directory = string.Format("{0}-metrics-{1}", filenamePrefix, DateTime.Now.ToString("yyyy-MM-dd_HH-mm"));
+            string directory = string.Format("{0}-metrics-{1}", filenamePrefix, DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"));
             string path = Path.GetTempPath();
             string filename = Path.Combine(path, directory);
 
