@@ -53,53 +53,15 @@ namespace EventStore.TestClientAPI.Commands
             var threads = new List<Thread>();
             CountdownEvent countdown = new CountdownEvent(clientsCnt);
 
-            var streams = Enumerable.Range(0, streamsCnt).Select(x => Guid.NewGuid().ToString()).ToArray();
+            string[] streams = Enumerable.Range(0, streamsCnt).Select(x => Guid.NewGuid().ToString()).ToArray();
 
             for (var i = 0; i < clientsCnt; i++)
             {
-                long sent = 0;
-                long received = 0;
-
-                ManualResetEvent appendComplete = new ManualResetEvent(false);
-
                 var count = requestsCnt / clientsCnt + ((i == clientsCnt - 1) ? requestsCnt % clientsCnt : 0);
-                Random random = new Random();
-
+ 
                 var client = context.Client.CreateEventStoreConnection();
                 clients.Add(client);
-
-                threads.Add(new Thread(() =>
-                {
-                    var stream = streams[random.Next(streamsCnt)];
-                    List<Task> tasks = new List<Task>(client.Settings.MaxConcurrentItems);
-
-                    for (var j = 0; j < count; j++)
-                    {
-                        var events = new EventData[] {Create(size)};
-                        var task = client.AppendToStreamAsync(stream, ExpectedVersion.Any, events);
-                        tasks.Add(task);
-
-                        var localSent = Interlocked.Increment(ref sent);
-                        while (localSent - Interlocked.Read(ref received) > client.Settings.MaxConcurrentItems)
-                        {
-                            var taskArray = tasks.ToArray();
-                            var index = Task.WaitAny(taskArray);
-                            Statistics.OnWriteEvent();
-                            Interlocked.Increment(ref received);
-                            tasks.RemoveAt(index);
-                        }
-                    }
-
-                    while (tasks.Count > 0)
-                    {
-                        var taskArray = tasks.ToArray();
-                        var index = Task.WaitAny(taskArray);
-                        Statistics.OnWriteEvent();
-                        tasks.RemoveAt(index);
-                    }
-
-                    countdown.Signal();
-                }) { IsBackground = true });
+                threads.Add(WriteFloodWorker.CreateThread(streams, count, countdown, Create, client, size));
             }
 
             threads.ForEach(thread => thread.Start());
@@ -116,6 +78,77 @@ namespace EventStore.TestClientAPI.Commands
             return new EventData(Guid.NewGuid(), "TakeSomeSpaceEvent", true,
                 UTF8NoBom.GetBytes("{ \"DATA\" : \"" + new string('*', size) + "\"}"),
                 UTF8NoBom.GetBytes("{ \"METADATA\" : \"" + new string('$', 100) + "\"}"));
+        }
+
+        private class WriteFloodWorker
+        {
+            private long _sent;
+            private long _sentComplete;
+
+            private string stream;
+            private long count;
+            private int size;
+            private CountdownEvent countdown;
+            private Func<int, EventData> Create; 
+            private IEventStoreConnection _connection;
+
+            private WriteFloodWorker(
+                string[] streams, 
+                long count, 
+                CountdownEvent countdown, 
+                Func<int, EventData> create, 
+                IEventStoreConnection connection,
+                int eventDataSize)
+            {
+                Random random = new Random(Guid.NewGuid().GetHashCode());
+                this.stream = streams[random.Next(streams.Length)];
+                this.count = count;
+                this.countdown = countdown;
+                Create = create;
+                _connection = connection;
+                size = eventDataSize;
+            }
+
+            public static Thread CreateThread(
+                string[] streams, 
+                long count, 
+                CountdownEvent countdown, 
+                Func<int, EventData> create, 
+                IEventStoreConnection connection,
+                int eventDataSize)
+            {
+                WriteFloodWorker worker = new WriteFloodWorker(streams, count, countdown, create, connection, eventDataSize);
+                ThreadStart threadStart = new ThreadStart(worker.Run);
+                Thread thread = new Thread(threadStart);
+                thread.IsBackground = true;
+
+                return thread;
+            }
+
+            private void Run()
+            {
+                for (var j = 0; j < count; j++)
+                {
+                    var events = new EventData[] { Create(size) };
+                    // AppendToStreamAsync will block if the internal send queue is full
+                    var task = _connection.AppendToStreamAsync(stream, ExpectedVersion.Any, events).ContinueWith(AppendToStreamComplete);
+                    Interlocked.Increment(ref _sent);
+                }
+
+                // wait for all submitted tasks to complete
+                while (Interlocked.Read(ref _sentComplete) < _sent)
+                {
+                    Thread.Sleep(1);
+                }
+
+                countdown.Signal();                
+            }
+
+            private void AppendToStreamComplete(Task task)
+            {
+                Statistics.OnWriteEvent();
+                Interlocked.Increment(ref _sentComplete);               
+            }
         }
     }
 }
